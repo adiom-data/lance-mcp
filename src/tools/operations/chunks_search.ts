@@ -3,7 +3,7 @@ import { BaseTool, ToolParams } from "../base/tool.js";
 
 export interface ChunksSearchParams extends ToolParams {
   text: string;
-  source?: string;
+  source: string;
 }
 
 export class ChunksSearchTool extends BaseTool<ChunksSearchParams> {
@@ -28,18 +28,20 @@ export class ChunksSearchTool extends BaseTool<ChunksSearchParams> {
 
   async execute(params: ChunksSearchParams) {
     try {
-      const retriever = chunksVectorStore.asRetriever();
+      const retriever = chunksVectorStore.asRetriever(10);
       const results = await retriever.invoke(params.text);
 
       // Filter results by source if provided
       // TODO: this needs to be pushed down to LanceDB
       if (params.source) {
+        let sourceList = params.source.split(/\s*,\s*/);
+
         return {
           content: [
             {
               type: "text" as const,
               text: JSON.stringify(
-                results.filter((result: any) => result.metadata.source === params.source),
+                results.filter((result: any) => sourceList.indexOf(result.metadata.source) > -1),
                 null,
                 2
               ),
