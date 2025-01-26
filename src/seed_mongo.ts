@@ -19,6 +19,7 @@ import { PromptTemplate } from "@langchain/core/prompts";
 import * as crypto from 'crypto';
 import * as defaults from './config'
 import { MongoClient } from 'mongodb';
+import { UnionMode } from "@lancedb/lancedb/dist/arrow";
 
 const argv: minimist.ParsedArgs = minimist(process.argv.slice(2),{boolean: "overwrite"});
 
@@ -71,17 +72,24 @@ async function catalogRecordExists(catalogTable: lancedb.Table, hash: string): P
   return results.length > 0;
 }
 
-async function getRecordsFromMongoDB(connectionString: string, dbName: string, collectionName: string):Promise<Document[]> {
+async function getRecordsFromMongoDB(connectionString: string, dbName: string, collectionName: string, limit: number = 1000):Promise<Document[]> {
     const client = new MongoClient(connectionString);
     try {
         await client.connect();
         const database = client.db(dbName);
         const collection = database.collection(collectionName);
-        const pipeline = [{ $match: { } }];
+        const pipeline = limit > 0 ? [{ $limit: limit }] : [{ $match: { } }];
         //const pipeline = [{ $sample: { size: count } }];
         const records = await collection.aggregate(pipeline).toArray();
 
-        return records.map(record => new Document({ id: record._id.toString(), pageContent: record.text, metadata: { source: dbName + "." + collectionName, record} }));
+        return records.map(record => {
+            let text = record.text
+            if (typeof text === 'string' && text.trim().length > 0) //there's a text field so we can use that
+                delete record.text
+            else 
+                text = JSON.stringify(record) //no text field so we'll use the JSON object
+            return new Document({ id: record._id.toString(), pageContent: text, metadata: { source: dbName + "." + collectionName, ...record} })
+    });
     } finally {
         await client.close();
     }
@@ -97,7 +105,7 @@ async function getRandomRecordsFromMongoDB(connectionString: string, dbName: str
         const records = await collection.aggregate(pipeline).toArray();
 
         return records.map(record => {
-            if (record.text.length > 100)
+            if (typeof record.text === 'string' && record.text.length > 100)
                 record.text = record.text.substring(0,100)+"..."
             return new Document({ id: record._id.toString(), pageContent: JSON.stringify(record), metadata: { source: dbName + "." + collectionName}})});
     } finally {
@@ -177,39 +185,51 @@ async function seed() {
 
     // load files from the files path
     console.log("Loading files...")
-    const rawDocs = await getRandomRecordsFromMongoDB(connectionString, dbName, colName);
-    console.log(rawDocs)
+    const rawRandomDocs = await getRandomRecordsFromMongoDB(connectionString, dbName, colName);
+    const rawDocs = await getRecordsFromMongoDB(connectionString, dbName, colName);
 
     console.log("Loading LanceDB catalog store...")
 
-    console.log(await generateContentOverview(rawDocs, model));
-    process.exit(1)
+    const { skipSources, catalogRecords } = await processDocuments(rawRandomDocs, catalogTable, overwrite || !catalogTableExists);
 
-    //const { skipSources, catalogRecords } = await processDocuments(rawDocs, catalogTable, overwrite || !catalogTableExists);
+    let catalogStore
+    if (overwrite) {
+        catalogStore = await LanceDB.fromDocuments(catalogRecords, 
+            new OllamaEmbeddings({model: defaults.EMBEDDING_MODEL}), 
+            { uri: databaseDir, tableName: defaults.CATALOG_TABLE_NAME } as LanceDBArgs)
+    } else {
+        catalogStore = new LanceDB(new OllamaEmbeddings({model: defaults.EMBEDDING_MODEL}), { uri: databaseDir, table: catalogTable});
+        if (catalogRecords.length > 0)
+            await catalogStore.addDocuments(catalogRecords)
+    }
+    console.log(catalogStore);
 
-    // const catalogStore = catalogRecords.length > 0 ? 
-    //     await LanceDB.fromDocuments(catalogRecords, 
-    //         new OllamaEmbeddings({model: defaults.EMBEDDING_MODEL}), 
-    //         { mode: overwrite ? "overwrite" : undefined, uri: databaseDir, tableName: defaults.CATALOG_TABLE_NAME } as LanceDBArgs) :
-    //     new LanceDB(new OllamaEmbeddings({model: defaults.EMBEDDING_MODEL}), { uri: databaseDir, table: catalogTable});
-    // console.log(catalogStore);
+    console.log("Number of new catalog records: ", catalogRecords.length);
+    console.log("Number of skipped sources: ", skipSources.length);
+    //remove skipped sources from rawDocs
+    const filteredRawDocs = rawDocs.filter((doc: any) => !skipSources.includes(doc.metadata.source));
 
-    // console.log("Number of new catalog records: ", catalogRecords.length);
-    // console.log("Number of skipped sources: ", skipSources.length);
-    // //remove skipped sources from rawDocs
-    // const filteredRawDocs = rawDocs.filter((doc: any) => !skipSources.includes(doc.metadata.source));
-
-    // console.log("Loading LanceDB vector store...")
-    // const docs = filteredRawDocs;
+    console.log("Loading LanceDB vector store...")
+    const splitter = new RecursiveCharacterTextSplitter({
+        chunkSize: 500,
+        chunkOverlap: 10,
+      });
+    const docs = await splitter.splitDocuments(filteredRawDocs);
     
-    // const vectorStore = docs.length > 0 ? 
-    //     await LanceDB.fromDocuments(docs, 
-    //     new OllamaEmbeddings({model: defaults.EMBEDDING_MODEL}), 
-    //     { mode: overwrite ? "overwrite" : undefined, uri: databaseDir, tableName: defaults.CHUNKS_TABLE_NAME } as LanceDBArgs) :
-    //     new LanceDB(new OllamaEmbeddings({model: defaults.EMBEDDING_MODEL}), { uri: databaseDir, table: chunksTable });
+    let vectorStore
+    if (overwrite) {
+        vectorStore = await LanceDB.fromDocuments(docs, 
+                        new OllamaEmbeddings({model: defaults.EMBEDDING_MODEL}), 
+                        { uri: databaseDir, tableName: defaults.CHUNKS_TABLE_NAME } as LanceDBArgs)
+    } else {
+        vectorStore = new LanceDB(new OllamaEmbeddings({model: defaults.EMBEDDING_MODEL}), { uri: databaseDir, table: chunksTable });
+        if (docs.length > 0) {
+            await vectorStore.addDocuments(docs)
+        }
+    }   
 
-    // console.log("Number of new chunks: ", docs.length);
-    // console.log(vectorStore);
+    console.log("Number of new chunks: ", docs.length);
+    console.log(vectorStore);
 }
 
 seed();
