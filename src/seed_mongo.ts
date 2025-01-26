@@ -24,16 +24,20 @@ const argv: minimist.ParsedArgs = minimist(process.argv.slice(2),{boolean: "over
 
 const databaseDir = argv["dbpath"];
 const connectionString = argv["connstr"];
+const dbName = argv["db"];
+const colName = argv["col"];
 const overwrite = argv["overwrite"];
 
 function validateArgs() {
-    if (!databaseDir || !connectionString) {
-        console.error("Please provide a database path (--dbpath) and a connection string (--connstr) to process");
+    if (!databaseDir || !connectionString || !dbName || !colName) {
+        console.error("Please provide a database path (--dbpath), a connection string (--connstr), db name (--db) and collection name (--col) to process");
         process.exit(1);
     }
     
     console.log("DATABASE PATH: ", databaseDir);
     console.log("CONNECTION STRING: ", connectionString);
+    console.log("DB NAME: ", dbName);
+    console.log("COLLECTION NAME: ", colName);
     console.log("OVERWRITE FLAG: ", overwrite);
 }
 
@@ -67,17 +71,35 @@ async function catalogRecordExists(catalogTable: lancedb.Table, hash: string): P
   return results.length > 0;
 }
 
-async function getRandomRecordsFromMongoDB(connectionString: string, dbName: string, collectionName: string, count: number = 10):Promise<Document[]> {
+async function getRecordsFromMongoDB(connectionString: string, dbName: string, collectionName: string):Promise<Document[]> {
     const client = new MongoClient(connectionString);
     try {
         await client.connect();
         const database = client.db(dbName);
         const collection = database.collection(collectionName);
+        const pipeline = [{ $match: { } }];
+        //const pipeline = [{ $sample: { size: count } }];
+        const records = await collection.aggregate(pipeline).toArray();
 
+        return records.map(record => new Document({ id: record._id.toString(), pageContent: record.text, metadata: { source: dbName + "." + collectionName, record} }));
+    } finally {
+        await client.close();
+    }
+}
+
+async function getRandomRecordsFromMongoDB(connectionString: string, dbName: string, collectionName: string, count: number = 10) {
+    const client = new MongoClient(connectionString);
+    try {
+        await client.connect();
+        const database = client.db(dbName);
+        const collection = database.collection(collectionName);
         const pipeline = [{ $sample: { size: count } }];
         const records = await collection.aggregate(pipeline).toArray();
 
-        return records.map(record => new Document({ id: record._id.toString(), pageContent: JSON.stringify(record), metadata: { source: dbName + "." + collectionName } }));
+        return records.map(record => {
+            if (record.text.length > 100)
+                record.text = record.text.substring(0,100)+"..."
+            return new Document({ id: record._id.toString(), pageContent: JSON.stringify(record), metadata: { source: dbName + "." + collectionName}})});
     } finally {
         await client.close();
     }
@@ -155,34 +177,39 @@ async function seed() {
 
     // load files from the files path
     console.log("Loading files...")
-    const rawDocs = await getRandomRecordsFromMongoDB(connectionString, "hosp", "admissions");
+    const rawDocs = await getRandomRecordsFromMongoDB(connectionString, dbName, colName);
+    console.log(rawDocs)
 
     console.log("Loading LanceDB catalog store...")
 
-    const { skipSources, catalogRecords } = await processDocuments(rawDocs, catalogTable, overwrite || !catalogTableExists);
-    const catalogStore = catalogRecords.length > 0 ? 
-        await LanceDB.fromDocuments(catalogRecords, 
-            new OllamaEmbeddings({model: defaults.EMBEDDING_MODEL}), 
-            { mode: overwrite ? "overwrite" : undefined, uri: databaseDir, tableName: defaults.CATALOG_TABLE_NAME } as LanceDBArgs) :
-        new LanceDB(new OllamaEmbeddings({model: defaults.EMBEDDING_MODEL}), { uri: databaseDir, table: catalogTable});
-    console.log(catalogStore);
+    console.log(await generateContentOverview(rawDocs, model));
+    process.exit(1)
 
-    console.log("Number of new catalog records: ", catalogRecords.length);
-    console.log("Number of skipped sources: ", skipSources.length);
-    //remove skipped sources from rawDocs
-    const filteredRawDocs = rawDocs.filter((doc: any) => !skipSources.includes(doc.metadata.source));
+    //const { skipSources, catalogRecords } = await processDocuments(rawDocs, catalogTable, overwrite || !catalogTableExists);
 
-    console.log("Loading LanceDB vector store...")
-    const docs = filteredRawDocs;
+    // const catalogStore = catalogRecords.length > 0 ? 
+    //     await LanceDB.fromDocuments(catalogRecords, 
+    //         new OllamaEmbeddings({model: defaults.EMBEDDING_MODEL}), 
+    //         { mode: overwrite ? "overwrite" : undefined, uri: databaseDir, tableName: defaults.CATALOG_TABLE_NAME } as LanceDBArgs) :
+    //     new LanceDB(new OllamaEmbeddings({model: defaults.EMBEDDING_MODEL}), { uri: databaseDir, table: catalogTable});
+    // console.log(catalogStore);
+
+    // console.log("Number of new catalog records: ", catalogRecords.length);
+    // console.log("Number of skipped sources: ", skipSources.length);
+    // //remove skipped sources from rawDocs
+    // const filteredRawDocs = rawDocs.filter((doc: any) => !skipSources.includes(doc.metadata.source));
+
+    // console.log("Loading LanceDB vector store...")
+    // const docs = filteredRawDocs;
     
-    const vectorStore = docs.length > 0 ? 
-        await LanceDB.fromDocuments(docs, 
-        new OllamaEmbeddings({model: defaults.EMBEDDING_MODEL}), 
-        { mode: overwrite ? "overwrite" : undefined, uri: databaseDir, tableName: defaults.CHUNKS_TABLE_NAME } as LanceDBArgs) :
-        new LanceDB(new OllamaEmbeddings({model: defaults.EMBEDDING_MODEL}), { uri: databaseDir, table: chunksTable });
+    // const vectorStore = docs.length > 0 ? 
+    //     await LanceDB.fromDocuments(docs, 
+    //     new OllamaEmbeddings({model: defaults.EMBEDDING_MODEL}), 
+    //     { mode: overwrite ? "overwrite" : undefined, uri: databaseDir, tableName: defaults.CHUNKS_TABLE_NAME } as LanceDBArgs) :
+    //     new LanceDB(new OllamaEmbeddings({model: defaults.EMBEDDING_MODEL}), { uri: databaseDir, table: chunksTable });
 
-    console.log("Number of new chunks: ", docs.length);
-    console.log(vectorStore);
+    // console.log("Number of new chunks: ", docs.length);
+    // console.log(vectorStore);
 }
 
 seed();
