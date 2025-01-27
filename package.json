@@ -18,7 +18,7 @@
     "build": "tsc && shx chmod +x dist/*.js",
     "prepare": "npm run build",
     "watch": "tsc --watch",
-    "seed": "tsx src/seed.ts"
+    "seed": "tsx src/seed_mongo.ts"
   },
   "keywords": [
     "mcp",

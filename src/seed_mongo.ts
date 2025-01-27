@@ -88,7 +88,11 @@ async function getRecordsFromMongoDB(connectionString: string, dbName: string, c
                 delete record.text
             else 
                 text = JSON.stringify(record) //no text field so we'll use the JSON object
-            return new Document({ id: record._id.toString(), pageContent: text, metadata: { source: dbName + "." + collectionName} })
+
+            if (! record.hasOwnProperty("subject_id"))
+                return new Document({ id: record._id.toString(), pageContent: text, metadata: { source: dbName + "." + collectionName, subject_id: -1} })
+            else
+                return new Document({ id: record._id.toString(), pageContent: text, metadata: { source: dbName + "." + collectionName, subject_id: record.subject_id} })
     });
     } finally {
         await client.close();

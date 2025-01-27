@@ -1,14 +1,15 @@
-import { chunksVectorStore } from "../../lancedb/client.js";
+import { chunksTable, chunksVectorStore } from "../../lancedb/client.js";
 import { BaseTool, ToolParams } from "../base/tool.js";
 
 export interface ChunksSearchParams extends ToolParams {
   text: string;
   source: string;
+  subject_id?: string;
 }
 
 export class ChunksSearchTool extends BaseTool<ChunksSearchParams> {
   name = "chunks_search";
-  description = "Search for relevant document chunks in the vector store based on a source document from the catalog";
+  description = "Search for relevant records chunks in the vector store based on a data source from the catalog";
   inputSchema = {
     type: "object" as const,
     properties: {
@@ -19,7 +20,12 @@ export class ChunksSearchTool extends BaseTool<ChunksSearchParams> {
       },
       source: {
         type: "string",
-        description: "Source document to filter the search",
+        description: "Specific data source (or a comma-separated list) to filter the search",
+        default: {},
+      },
+      subject_id: {
+        type: "string",
+        description: "Specific subject id to filter the search",
         default: {},
       },
     },
@@ -28,7 +34,7 @@ export class ChunksSearchTool extends BaseTool<ChunksSearchParams> {
 
   async execute(params: ChunksSearchParams) {
     try {
-      const retriever = chunksVectorStore.asRetriever(10);
+      const retriever = chunksVectorStore.asRetriever(10, params.subject_id ? "metadata.subject_id="+params.subject_id : undefined);
       const results = await retriever.invoke(params.text);
 
       // Filter results by source if provided

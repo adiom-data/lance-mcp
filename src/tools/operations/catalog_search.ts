@@ -7,7 +7,7 @@ export interface CatalogSearchParams extends ToolParams {
 
 export class CatalogSearchTool extends BaseTool<CatalogSearchParams> {
   name = "catalog_search";
-  description = "Search for relevant documents in the catalog";
+  description = "Search for relevant data sources in the catalog";
   inputSchema = {
     type: "object" as const,
     properties: {
