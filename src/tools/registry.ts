@@ -3,6 +3,7 @@ import { BroadSearchTool } from "./operations/broad_chunks_search.js";
 import { CatalogSearchTool } from "./operations/catalog_search.js";
 import { ChunksSearchTool } from "./operations/chunks_search.js";
 import { McpError, ErrorCode, Tool } from "@modelcontextprotocol/sdk/types.js";
+import { ValidateTool } from "./operations/validate.js";
 
 export class ToolRegistry {
   private tools: Map<string, BaseTool<any>> = new Map();
@@ -11,6 +12,7 @@ export class ToolRegistry {
     this.registerTool(new ChunksSearchTool());
     this.registerTool(new CatalogSearchTool());
     this.registerTool(new BroadSearchTool());
+    this.registerTool(new ValidateTool());
   }
 
   registerTool(tool: BaseTool<any>) {
