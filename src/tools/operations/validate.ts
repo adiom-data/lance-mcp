@@ -1,12 +1,23 @@
-import { chunksVectorStore } from "../../lancedb/client.js";
+import { chunksTable, chunksVectorStore } from "../../lancedb/client.js";
 import { BaseTool, ToolParams } from "../base/tool.js";
 import ollama from 'ollama';
 import { sprintf } from 'sprintf-js';
 import { split } from 'sentence-splitter';
+import fs from 'fs'; // Import the fs module
+
 
 export interface ValidateParams extends ToolParams {
   output: string;
   prompt: string;
+}
+
+function logToFile(data: string) {
+  const fileName = 'validate.log'
+  fs.appendFile(fileName, data + '\n', (err) => {
+    if (err) {
+      console.error(`Failed to write to file ${fileName}:`, err);
+    }
+  });
 }
 
 export class ValidateTool extends BaseTool<ValidateParams> {
@@ -29,6 +40,8 @@ export class ValidateTool extends BaseTool<ValidateParams> {
     required: ["output", "prompt"],
   };
 
+
+
   // checks if the claim is supported by the document by calling bespoke-minicheck via Ollama
   async checkClaim(document: string, claim: string) {
     const prompt = sprintf("Document: %s\nClaim: %s", document, claim);
@@ -37,7 +50,7 @@ export class ValidateTool extends BaseTool<ValidateParams> {
         model: 'bespoke-minicheck',
         messages: [{ role: 'user', content: prompt }],
       })
-      console.error("CHECK CLAIM PROMPT: " + prompt + ". RESPONSE: " + response.message.content)
+      logToFile("CHECK CLAIM PROMPT: " + prompt + ". RESPONSE: " + response.message.content)
 
       return response.message.content === "Yes"
   }
@@ -49,7 +62,7 @@ export class ValidateTool extends BaseTool<ValidateParams> {
     const checkResults = await Promise.all(checkPromises);
     const trueCount = checkResults.filter(result => result).length;
     const truePercentage = (trueCount / checkResults.length) * 100;
-    console.error(`CHECK CLAIM TOTAL: Percentage of claims supported: ${truePercentage}%`);
+    logToFile(`CHECK CLAIM TOTAL: Percentage of claims supported: ${truePercentage}%`);
   }
 
     // checks the output for mistakes 
@@ -60,7 +73,7 @@ export class ValidateTool extends BaseTool<ValidateParams> {
             model: 'qwen2.5-coder',
             messages: [{ role: 'user', content: prompt }],
           })
-          console.error("CHECK CORRECT PROMPT: " + prompt + ". RESPONSE: " + response.message.content)
+          logToFile("CHECK CORRECT PROMPT: " + prompt + ". RESPONSE: " + response.message.content)
       }
 
     // checks the output for hallucinations 
@@ -71,7 +84,7 @@ export class ValidateTool extends BaseTool<ValidateParams> {
             model: 'qwen2.5-coder',
             messages: [{ role: 'user', content: prompt }],
           })
-          console.error("CHECK HALLUCINATION PROMPT: " + prompt + ". RESPONSE: " + response.message.content)
+          logToFile("CHECK HALLUCINATION PROMPT: " + prompt + ". RESPONSE: " + response.message.content)
       }
 
     // checks the output for omissions 
@@ -82,31 +95,47 @@ export class ValidateTool extends BaseTool<ValidateParams> {
             model: 'qwen2.5-coder',
             messages: [{ role: 'user', content: prompt }],
           })
-          console.error("CHECK OMISSIONS: " + prompt + ". RESPONSE: " + response.message.content)
+          logToFile("CHECK OMISSIONS: " + prompt + ". RESPONSE: " + response.message.content)
       }
     
+    async validate(prompt: string, groundingDoc: string, output: string) {
+      logToFile("BEGINNING VALIDATION");
+      await this.checkOutputClaims(groundingDoc, output);
+      await this.checkOutputCorrect(groundingDoc, output);
+      await this.checkOutputHallucinations(groundingDoc, output);
+      await this.checkOutputOmissions(prompt, groundingDoc, output);
+      logToFile("END VALIDATION");
+    }
 
   async execute(params: ValidateParams) {
     try {
-      const retriever = chunksVectorStore.asRetriever(10);
-      const results = await retriever.invoke(params.prompt);
+      // const retriever = chunksVectorStore.asRetriever(10);
+      // const results = await retriever.invoke(params.prompt);
+      const results = await chunksTable.query().where("subject_id = 10000032").limit(10).toArray();
 
-      // generate a combined grounding doc from each element in results.pageContent
+      // generate a combined grounding doc from each element
+      // ignore duplicates and remove unneeded metadata
       let groundingDoc = "";
+      const seenIds = new Set();
       for (let i = 0; i < results.length; i++) {
-          groundingDoc += results[i].pageContent + "\n";
+          if (seenIds.has(results[i].id)) {
+            continue;
+          }
+          seenIds.add(results[i].id);
+          // copy the results[i] object
+          const resultCopy = { ...results[i] };
+          // remove extra metadata
+          delete resultCopy.vector;
+          delete resultCopy.text;
+          delete resultCopy.loc;
+          groundingDoc += resultCopy.full_text + "\n";
       }
 
-      this.checkOutputClaims(groundingDoc, params.output);
-      this.checkOutputCorrect(groundingDoc, params.output);
-      this.checkOutputHallucinations(groundingDoc, params.output);
-      this.checkOutputOmissions(params.prompt, groundingDoc, params.output);
-      
-      //await this.check(groundingDoc, params.output);
+      this.validate(params.prompt, groundingDoc, params.output);
 
       return {
         content: [
-          { type: "text" as const, text: JSON.stringify(results, null, 2) },
+          { type: "text" as const, text: groundingDoc },
         ],
         isError: false,
       };

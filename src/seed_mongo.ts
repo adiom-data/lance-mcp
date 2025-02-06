@@ -83,16 +83,17 @@ async function getRecordsFromMongoDB(connectionString: string, dbName: string, c
         const records = await collection.aggregate(pipeline).toArray();
 
         return records.map(record => {
-            let text = record.text
-            if (typeof text === 'string' && text.trim().length > 0) //there's a text field so we can use that
-                delete record.text
-            else 
-                text = JSON.stringify(record) //no text field so we'll use the JSON object
+            // let text = record.text
+            // if (typeof text === 'string' && text.trim().length > 0) //there's a text field so we can use that
+            //     delete record.text
+            // else 
+            let text = JSON.stringify(record) //no text field so we'll use the JSON object
 
-            if (! record.hasOwnProperty("subject_id"))
-                return new Document({ id: record._id.toString(), pageContent: text, metadata: { source: dbName + "." + collectionName, subject_id: -1} })
-            else
-                return new Document({ id: record._id.toString(), pageContent: text, metadata: { source: dbName + "." + collectionName, subject_id: record.subject_id} })
+            let subject_id = -1
+            if (record.hasOwnProperty("subject_id"))
+                subject_id = record.subject_id
+
+            return new Document({ id: record._id.toString(), pageContent: text, metadata: { source: dbName + "." + collectionName, subject_id: subject_id, id: record._id.toString(), full_text: text} })
     });
     } finally {
         await client.close();
