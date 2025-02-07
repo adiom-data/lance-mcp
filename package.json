@@ -32,7 +32,7 @@
     "@lancedb/lancedb": "^0.15.0",
     "@langchain/community": "^0.3.24",
     "@langchain/ollama": "^0.1.4",
-    "@modelcontextprotocol/sdk": "1.1.1",
+    "@modelcontextprotocol/sdk": "^1.1.1",
     "minimist": "^1.2.8",
     "pdf-parse": "^1.1.1",
     "sentence-splitter": "^5.0.0",
