@@ -10,8 +10,18 @@ interface Verdict {
   reason?: string;
 }
 
+interface Fact {
+  fact: string;
+  value: string;
+  reason: string;
+}
+
 interface VerdictResponse {
   verdicts: Verdict[];
+}
+
+interface FactResponse {
+  missed_facts: Fact[];
 }
 
 function extractVerdictsFromMarkdown(markdownString: string): Verdict[] {
@@ -25,6 +35,23 @@ function extractVerdictsFromMarkdown(markdownString: string): Verdict[] {
       const parsed: VerdictResponse = JSON.parse(jsonString);
       
       return parsed.verdicts;
+  } catch (error) {
+      console.error('Error parsing JSON from markdown:', error);
+      throw new Error('Failed to parse JSON from markdown string');
+  }
+}
+
+function extractFactsFromMarkdown(markdownString: string): Fact[] {
+  try {
+      // Remove the markdown code block formatting
+      const jsonString = markdownString
+          .replace(/^```json\s*/, '') // Remove opening ```json
+          .replace(/\s*```$/, '');    // Remove closing ```
+      
+      // Parse the JSON
+      const parsed: FactResponse = JSON.parse(jsonString);
+      
+      return parsed.missed_facts;
   } catch (error) {
       console.error('Error parsing JSON from markdown:', error);
       throw new Error('Failed to parse JSON from markdown string');
@@ -89,6 +116,8 @@ export class ValidateTool extends BaseTool<ValidateParams> {
     const trueCount = checkResults.filter(result => result).length;
     const truePercentage = (trueCount / checkResults.length) * 100;
     logToFile(`CHECK CLAIM TOTAL: Percentage of claims supported: ${truePercentage}%`);
+
+    return {yes: trueCount, no: checkResults.length - trueCount}
   }
 
     // checks the output for mistakes 
@@ -188,14 +217,14 @@ ${output}
       Provide a 'reason' to explain why the fact is important to the original question.
       
       **
-      IMPORTANT: Please make sure to only return in JSON format, with the 'verdicts' key as a list of JSON objects.
+      IMPORTANT: Please make sure to only return in JSON format, with the 'missed_facts' key as a list of JSON objects.
       Example retrieval contexts: "Einstein won the Nobel Prize for his discovery of the photoelectric effect. Einstein won the Nobel Prize in 1968. Einstein is a German Scientist."
       Example question: "What did Einstein win the Nobel Prize for?"
       Example facts: ["Einstein won the Nobel Prize.", "Einstein won the Nobel Prize in 1968"]
       
       Example:
       {{
-          "verdicts": [
+          "missed_facts": [
               {{
                   "fact": "Einstein won the Nobel Prize for his discovery of the photoelectric effect",
                   "value": "high",
@@ -228,35 +257,56 @@ ${output}
           })
           logToFile("CHECK OMISSIONS: " + prompt + ". RESPONSE: " + response.message.content)
 
-          const verdicts = extractVerdictsFromMarkdown(response.message.content);
-          const verdictCounts = {
+          const facts = extractFactsFromMarkdown(response.message.content);
+          const factCounts = {
             missed: 0,
           };
 
-          verdicts.forEach(verdict => {
-            if (verdict.verdict === 'high' || verdict.verdict === 'medium') {
-              verdictCounts.missed++;
+          facts.forEach(verdict => {
+            if (verdict.value === 'high' || verdict.value === 'medium') {
+              factCounts.missed++;
             }
           });
 
-          logToFile(`MISSED COUNTS : ${verdicts.length}`);
+          logToFile(`MISSED COUNTS : ${facts.length}`);
 
-          return verdictCounts
+          return factCounts
       }
     
     async validate(prompt: string, groundingDoc: string, output: string) {
       logToFile("BEGINNING VALIDATION");
-      // await this.checkOutputClaims(groundingDoc, output);
+      const startCorrectM = Date.now();
+      let resCorrectM = await this.checkOutputClaims(groundingDoc, output);
+      const endCorrectM = Date.now();
+
+      const startCorrect = Date.now();
       let resCorrect = await this.checkOutputCorrect(groundingDoc, output);
+      const endCorrect = Date.now();
+
+      // const startHalluc = Date.now();
       // await this.checkOutputHallucinations(groundingDoc, output);
+      // const endHalluc = Date.now();
+
+      const startHalluc = Date.now();
       let resHalluc = await this.checkOutputOmissions(prompt, groundingDoc, output);
+      const endHalluc = Date.now();
 
-      let tp = resCorrect.yes
-      let fp = resCorrect.no + resCorrect.idk
-      let fn = resHalluc.missed
+      logToFile(`Time taken for checkOutputClaims: ${endCorrectM - startCorrectM}ms`);
+      logToFile(`Time taken for checkOutputCorrect: ${endCorrect - startCorrect}ms`);
+      logToFile(`Time taken for checkOutputOmissions: ${endHalluc - startHalluc}ms`);
 
-      let f1 = tp / (tp + (fp + fn) / 2)
-      logToFile("END VALIDATION. F1 score: " + f1);
+      //regular LLM-based
+      const tp = resCorrect.yes
+      const fp = resCorrect.no + resCorrect.idk
+      const fn = resHalluc.missed
+
+      const f1 = tp / (tp + (fp + fn) / 2)
+
+      //with mini-check for fact-checking
+      const tpM = resCorrectM.yes
+      const fpM = resCorrectM.no
+      const f1M = tpM / (tpM + (fpM + fn) / 2)
+      logToFile(`END VALIDATION. F1 score: ${f1} (with minicheck: ${f1M})`);
     }
 
   async execute(params: ValidateParams) {
